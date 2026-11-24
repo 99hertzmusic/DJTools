@@ -1,0 +1,32 @@
+# Build output
+build/
+build*/
+dist/
+tmp/
+*.o
+*.a
+*.d
+*.pkg
+*.dmg
+*.zip
+*.exe
+*.log
+# JUCE comes from FetchContent on CI (local JUCE is a symlink)
+JUCE
+JUCE/
+# Test renders, demos, screenshots (not needed to build)
+render/
+# Secrets: never commit licence keys or signing material
+*.key
+*.pem
+*.p12
+*.env
+keys*.txt
+*key*.txt
+# Editors / OS
+.DS_Store
+.claude/
+.vscode/
+*.user
+installer/windows_ci.nsi
+windows_ci.nsi

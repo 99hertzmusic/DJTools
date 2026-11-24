@@ -1,0 +1,77 @@
+name: Windows VST3 installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 40
+    env:
+      TARGET: DJTools
+      OPT_PREFIX: DJTOOLS
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read product name and version from CMakeLists.txt
+        shell: pwsh
+        run: |
+          $cm = Get-Content CMakeLists.txt -Raw
+          $ver = [regex]::Match($cm, 'project\(\s*\w+\s+VERSION\s+([0-9.]+)').Groups[1].Value
+          $prod = [regex]::Match($cm, 'PRODUCT_NAME\s+"([^"]+)"').Groups[1].Value
+          if (-not $ver -or -not $prod) { throw "Could not read version/product name" }
+          "VERSION=$ver" >> $env:GITHUB_ENV
+          "PRODUCT=$prod" >> $env:GITHUB_ENV
+          "FILEBASE=$($prod -replace ' ','')-$ver-windows-setup" >> $env:GITHUB_ENV
+          Write-Host "$prod $ver"
+
+      # Caches JUCE (FetchContent) and the compiled JUCE modules so reruns only rebuild our sources.
+      - name: Cache build tree
+        uses: actions/cache@v4
+        with:
+          path: build-windows
+          key: win-build-v1-${{ hashFiles('CMakeLists.txt') }}-${{ github.sha }}
+          restore-keys: |
+            win-build-v1-${{ hashFiles('CMakeLists.txt') }}-
+            win-build-v1-
+
+      - name: Configure
+        run: >
+          cmake -S . -B build-windows -G "Visual Studio 17 2022" -A x64
+          -D${{ env.OPT_PREFIX }}_COPY_PLUGIN_AFTER_BUILD=OFF
+          -D${{ env.OPT_PREFIX }}_BUILD_TEST=OFF
+
+      - name: Build VST3
+        run: cmake --build build-windows --config Release --target ${{ env.TARGET }}_VST3 -- /m /v:minimal
+
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          $root  = $env:GITHUB_WORKSPACE
+          $vst3  = "$root\build-windows\$($env:TARGET)_artefacts\Release\VST3\$($env:PRODUCT).vst3"
+          if (-not (Test-Path $vst3)) { throw "VST3 not found at $vst3" }
+          $stage = "$root\nsis-stage"
+          New-Item -ItemType Directory -Force -Path $stage, "$root\dist" | Out-Null
+          Copy-Item -Recurse -Force $vst3 "$stage\"
+          Copy-Item "$root\scripts\installer.nsi" "$stage\installer.nsi"
+          Push-Location $stage
+          makensis /V2 "/DPRODUCT=$($env:PRODUCT)" "/DVERSION=$($env:VERSION)" "/DREGKEY=$($env:TARGET)" "/DOUTFILE=$root\dist\$($env:FILEBASE).exe" installer.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+          Pop-Location
+          Get-ChildItem -Recurse $stage -Include *.vst3 | Select-Object FullName, Length
+          Get-Item "$root\dist\$($env:FILEBASE).exe" | Select-Object Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FILEBASE }}
+          path: dist/${{ env.FILEBASE }}.exe
+          retention-days: 14
+          if-no-files-found: error
