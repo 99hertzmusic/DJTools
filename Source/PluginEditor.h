@@ -59,8 +59,10 @@ public:
     void resized() override;
     void mouseDown (const juce::MouseEvent& e) override;   // click outside the card closes it
     std::function<void()> onLicenceChanged;
+    void setMessage (const juce::String& text, bool isError);   // (also used by the test renders)
 private:
     void refresh();
+    void licenceResult (const juce::String& error, const juce::String& okMessage);
     juce::Rectangle<int> card() const;
     DJToolsAudioProcessor& proc;
     juce::String reason, message;
@@ -68,7 +70,8 @@ private:
     juce::TextEditor emailBox, keyBox;
     juce::ToggleButton subscribe { "Send me tips and offers" };
     juce::TextButton trialButton { "START 7-DAY FREE TRIAL" }, unlockButton { "UNLOCK" },
-                     buyButton { "UPGRADE" }, closeButton { "CLOSE" };
+                     buyButton { "UPGRADE" }, closeButton { "CLOSE" },
+                     activateButton { "ACTIVATE THIS COMPUTER" }, moveButton { "MOVE TO ANOTHER COMPUTER" };
 };
 
 // Covers the controls while there's no trial or key.
@@ -79,6 +82,7 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     std::function<void()> onOpen;
+    void setButtonText (const juce::String& t) { if (openButton.getButtonText() != t) openButton.setButtonText (t); }
 private:
     DJToolsAudioProcessor& proc;
     juce::TextButton openButton { "START FREE TRIAL / ENTER KEY" };

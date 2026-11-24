@@ -427,41 +427,44 @@ ProPanel::ProPanel (DJToolsAudioProcessor& p) : proc (p)
     subscribe.setColour (juce::ToggleButton::textColourId, Pal::silkMid);
     subscribe.setColour (juce::ToggleButton::tickColourId, Pal::accent);
     subscribe.setColour (juce::ToggleButton::tickDisabledColourId, Pal::silkLo);
-    for (auto* c : std::initializer_list<juce::Component*> { &emailBox, &keyBox, &subscribe, &trialButton, &unlockButton, &buyButton, &closeButton })
+    for (auto* c : std::initializer_list<juce::Component*> { &emailBox, &keyBox, &subscribe, &trialButton, &unlockButton, &buyButton, &closeButton,
+                                                             &activateButton, &moveButton })
         addAndMakeVisible (c);
+    activateButton.getProperties().set ("lit", true);
     buyButton.getProperties().set ("lit", true);
     trialButton.getProperties().set ("lit", true);
 
     closeButton.onClick = [this] { setVisible (false); };
     buyButton.onClick = [] { juce::URL (dj::buyUrl).launchInDefaultBrowser(); };
+    // UNLOCK: a trial key is saved at once; a pro key activates this computer first (needs the internet once).
     unlockButton.onClick = [this]
     {
-        const auto pasted = hz::Licence::verify (keyBox.getText(), proc.licence.product);
-        const auto info = proc.licence.apply (keyBox.getText());
-        if (info.kind == hz::LicenceInfo::saveFailed)
+        busy = true; message = "ACTIVATING..."; messageIsError = false; refresh();
+        juce::Component::SafePointer<ProPanel> safe (this);
+        proc.licence.unlock (keyBox.getText(), [safe] (hz::LicenceInfo info, juce::String error)
         {
-            message = "COULDN'T SAVE YOUR KEY. EMAIL INFO@99HERTZ.COM";
-            messageIsError = true;
-        }
-        else if (pasted.kind == hz::LicenceInfo::trialExpired)
+            if (safe == nullptr) return;
+            if (error.isEmpty() && info.unlocked()) safe->keyBox.clear();
+            safe->licenceResult (error, info.kind == hz::LicenceInfo::pro ? "UNLOCKED. THANK YOU!" : "TRIAL UNLOCKED");
+        });
+    };
+    activateButton.onClick = [this]
+    {
+        busy = true; message = "ACTIVATING..."; messageIsError = false; refresh();
+        juce::Component::SafePointer<ProPanel> safe (this);
+        proc.licence.activate ([safe] (hz::LicenceInfo, juce::String error)
         {
-            message = "THAT TRIAL KEY HAS ENDED";
-            messageIsError = true;
-        }
-        else if (info.unlocked())
+            if (safe != nullptr) safe->licenceResult (error, "ACTIVATED. THANK YOU!");
+        });
+    };
+    moveButton.onClick = [this]
+    {
+        busy = true; message = "MOVING..."; messageIsError = false; refresh();
+        juce::Component::SafePointer<ProPanel> safe (this);
+        proc.licence.deactivate ([safe] (hz::LicenceInfo, juce::String error)
         {
-            proc.setLicenceInfo (info);
-            message = info.kind == hz::LicenceInfo::pro ? "UNLOCKED. THANK YOU!" : "TRIAL UNLOCKED";
-            messageIsError = false;
-            keyBox.clear();
-            if (onLicenceChanged) onLicenceChanged();
-        }
-        else
-        {
-            message = "THAT KEY ISN'T VALID FOR DJ TOOLS";
-            messageIsError = true;
-        }
-        refresh();
+            if (safe != nullptr) safe->licenceResult (error, "DONE. PASTE YOUR KEY ON THE OTHER COMPUTER");
+        });
     };
     trialButton.onClick = [this]
     {
@@ -489,6 +492,23 @@ ProPanel::ProPanel (DJToolsAudioProcessor& p) : proc (p)
     };
 }
 
+// After any licence request: re-read what's saved (the truth for this instance), then say how it went.
+void ProPanel::licenceResult (const juce::String& error, const juce::String& okMessage)
+{
+    busy = false;
+    proc.setLicenceInfo (proc.licence.check());
+    message = error.isNotEmpty() ? error.toUpperCase() : okMessage;
+    messageIsError = error.isNotEmpty();
+    if (onLicenceChanged) onLicenceChanged();
+    refresh();
+}
+
+void ProPanel::setMessage (const juce::String& text, bool isError)
+{
+    message = text; messageIsError = isError;
+    refresh();
+}
+
 void ProPanel::licenceChanged()
 {
     if (isVisible()) refresh();
@@ -509,9 +529,12 @@ void ProPanel::refresh()
     const auto k = proc.licenceInfo.kind;
     const bool canTrial = k == hz::LicenceInfo::none || k == hz::LicenceInfo::invalid;
     const bool isPro = k == hz::LicenceInfo::pro;
+    const bool needsAct = k == hz::LicenceInfo::needsActivation;
     emailBox.setVisible (canTrial); subscribe.setVisible (canTrial); trialButton.setVisible (canTrial);
-    keyBox.setVisible (! isPro); unlockButton.setVisible (! isPro); buyButton.setVisible (! isPro);
-    trialButton.setEnabled (! busy);
+    keyBox.setVisible (! isPro && ! needsAct); unlockButton.setVisible (! isPro && ! needsAct); buyButton.setVisible (! isPro && ! needsAct);
+    activateButton.setVisible (needsAct); moveButton.setVisible (isPro);
+    for (auto* b : { &trialButton, &unlockButton, &activateButton, &moveButton }) b->setEnabled (! busy);
+    getProperties().set ("hzMessage", message);
     trialButton.setButtonText (busy ? "STARTING..." : "START 7-DAY FREE TRIAL");
     resized();
     repaint();
@@ -528,6 +551,8 @@ void ProPanel::resized()
     unlockButton.setBounds (x + w - 220, c.getY() + 316, 220, 46);
     buyButton.setBounds (x, c.getBottom() - 62, 220, 46);
     closeButton.setBounds (x + w - 120, c.getBottom() - 62, 120, 46);
+    activateButton.setBounds (x, c.getY() + 218, 280, 46);
+    moveButton.setBounds (x, c.getBottom() - 62, 270, 46);
 }
 
 void ProPanel::mouseDown (const juce::MouseEvent& e)
@@ -558,7 +583,7 @@ void ProPanel::paint (juce::Graphics& g)
     juce::String sub = reason;
     if (k == hz::LicenceInfo::trial)             sub = "FREE TRIAL: " + proc.licenceInfo.daysLeftText();
     else if (k == hz::LicenceInfo::trialExpired) sub = "YOUR FREE TRIAL HAS ENDED";
-    else if (k == hz::LicenceInfo::pro)          sub = "LICENSED TO " + proc.licenceInfo.email.toUpperCase();
+    else if (proc.licenceInfo.isProKey())          sub = proc.licenceInfo.licensedText();
     else if (sub.isEmpty())                      sub = "TRY EVERY EFFECT FREE FOR 7 DAYS";
     g.setFont (Fonts::led (14.0f, 0.08f));
     glowText (g, sub, { x, c.getY() + 78.0f, w, 18.0f }, juce::Justification::centredLeft, k == hz::LicenceInfo::trialExpired ? Pal::warn : Pal::accent);
@@ -583,14 +608,18 @@ void ProPanel::paint (juce::Graphics& g)
         g.drawText ("NO CARD NEEDED. YOUR TRIAL KEY ALSO COMES BY EMAIL.", juce::Rectangle<float> (x, c.getY() + 200.0f, w, 14.0f), juce::Justification::centredLeft);
     else if (k == hz::LicenceInfo::trialExpired)
         g.drawText ("THANKS FOR TRYING DJ TOOLS. BUY IT TO KEEP USING IT.", juce::Rectangle<float> (x, c.getY() + 200.0f, w, 14.0f), juce::Justification::centredLeft);
-    if (k != hz::LicenceInfo::pro)
+    if (k == hz::LicenceInfo::needsActivation)
+        g.drawText ("YOUR KEY IS SAVED. ONE CLICK TO ACTIVATE THIS COMPUTER.", juce::Rectangle<float> (x, c.getY() + 200.0f, w, 14.0f), juce::Justification::centredLeft);
+    if (! proc.licenceInfo.isProKey())
         g.drawText ("ALREADY BOUGHT IT? PASTE YOUR KEY", juce::Rectangle<float> (x, c.getY() + 302.0f, w, 14.0f), juce::Justification::centredLeft);
 
     if (message.isNotEmpty())
     {
-        g.setFont (Fonts::led (13.0f, 0.04f));
+        const bool longMsg = message.length() > 70;   // e.g. the server's "already in use on <computer>" message
+        g.setFont (Fonts::led (longMsg ? 11.5f : 13.0f, 0.04f));
         g.setColour (messageIsError ? Pal::warn : Pal::accent);
-        g.drawFittedText (message, juce::Rectangle<int> ((int) x, (int) c.getBottom() - 86, (int) w, 18), juce::Justification::centredLeft, 1);
+        g.drawFittedText (message, juce::Rectangle<int> ((int) x, (int) c.getBottom() - (longMsg ? 93 : 86), (int) w, longMsg ? 30 : 18),
+                          juce::Justification::centredLeft, longMsg ? 2 : 1);
     }
 }
 
@@ -608,15 +637,17 @@ void LockOverlay::paint (juce::Graphics& g)
 {
     g.fillAll (juce::Colour (0xff0b0b0c).withAlpha (0.78f));
     const bool ended = proc.licenceInfo.kind == hz::LicenceInfo::trialExpired;
+    const bool needsAct = proc.licenceInfo.kind == hz::LicenceInfo::needsActivation;
     auto r = getLocalBounds().toFloat();
     const auto c = r.getCentre();
     padlock (g, { c.x - 11.0f, c.y - 96.0f, 22.0f, 28.0f }, Pal::accent);
     g.setFont (Fonts::silkBold (24.0f, 0.18f));
     g.setColour (Pal::silk);
-    g.drawText (ended ? "YOUR FREE TRIAL HAS ENDED" : "DJ TOOLS IS LOCKED", juce::Rectangle<float> (0, c.y - 60.0f, r.getWidth(), 30.0f), juce::Justification::centred);
+    g.drawText (needsAct ? "ACTIVATE THIS COMPUTER" : ended ? "YOUR FREE TRIAL HAS ENDED" : "DJ TOOLS IS LOCKED", juce::Rectangle<float> (0, c.y - 60.0f, r.getWidth(), 30.0f), juce::Justification::centred);
     g.setFont (Fonts::silkMed (15.0f, 0.04f));
     g.setColour (Pal::silkMid);
-    g.drawText (ended ? "Buy DJ Tools or paste your key. Until then your audio passes through untouched."
+    g.drawText (needsAct ? "Your key is saved. Activate it on this computer once. Until then your audio passes through untouched."
+                : ended ? "Buy DJ Tools or paste your key. Until then your audio passes through untouched."
                       : "Start a free 7-day trial or paste your key. Until then your audio passes through untouched.",
                 juce::Rectangle<float> (0, c.y - 26.0f, r.getWidth(), 20.0f), juce::Justification::centred);
 }
@@ -902,6 +933,7 @@ void DJToolsAudioProcessorEditor::updateLicence()
     }
     const bool locked = ! proc.unlocked.load();
     if (lockOverlay.isVisible() != locked) lockOverlay.setVisible (locked);
+    lockOverlay.setButtonText (li.kind == hz::LicenceInfo::needsActivation ? "ACTIVATE" : "START FREE TRIAL / ENTER KEY");
     lockOverlay.repaint();
 }
 
@@ -1064,7 +1096,7 @@ void DJToolsAudioProcessorEditor::paint (juce::Graphics& g)
         const auto lb = licenceButton.getBounds();
         g.setFont (Fonts::silkMed (12.0f, 0.04f));
         g.setColour (Pal::silkMid);
-        g.drawFittedText (proc.licenceInfo.email, { lb.getRight() + 8, lb.getY(), ledArea.getX() - lb.getRight() - 16, lb.getHeight() },
+        g.drawFittedText (proc.licenceInfo.ownerText(), { lb.getRight() + 8, lb.getY(), ledArea.getX() - lb.getRight() - 16, lb.getHeight() },
                           juce::Justification::centredLeft, 1, 0.8f);
     }
 

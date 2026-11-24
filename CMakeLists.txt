@@ -60,7 +60,7 @@ target_compile_definitions(DJTools PUBLIC
 target_compile_features(DJTools PUBLIC cxx_std_17)
 
 target_link_libraries(DJTools
-    PRIVATE DJToolsData juce::juce_audio_utils juce::juce_dsp
+    PRIVATE DJToolsData juce::juce_audio_utils juce::juce_dsp juce::juce_cryptography
     PUBLIC juce::juce_recommended_config_flags juce::juce_recommended_warning_flags)
 
 # Offline test: every effect, grid timing, tails, dead zone, clicks, smoothing, state, licence gate, demos, UI snapshots (not shipped)
@@ -71,5 +71,5 @@ if(DJTOOLS_BUILD_TEST)
     target_compile_definitions(DJToolsTest PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_STANDALONE_APPLICATION=1
         DJTOOLS_TEST=1 JucePlugin_VersionString="1.0.0" JUCE_MODAL_LOOPS_PERMITTED=1)
     target_compile_features(DJToolsTest PRIVATE cxx_std_17)
-    target_link_libraries(DJToolsTest PRIVATE DJToolsData juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
+    target_link_libraries(DJToolsTest PRIVATE DJToolsData juce::juce_audio_utils juce::juce_dsp juce::juce_cryptography juce::juce_recommended_config_flags)
 endif()

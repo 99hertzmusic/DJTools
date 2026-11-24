@@ -1117,6 +1117,7 @@ int main (int argc, char** argv)
                  (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0);
 
     hztest::runLicenceTests<DJToolsAudioProcessor> ("djtools", [] (DJToolsAudioProcessor& p) { return p.unlocked.load(); });
+    hztest::renderLicenceStates<DJToolsAudioProcessor> ("djtools", outDir);
     const int licenceResult = hztest::finish();
     return (failures == 0 && licenceResult == 0) ? 0 : 1;
 }
