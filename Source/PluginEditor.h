@@ -7,15 +7,21 @@
 class HardwareLookAndFeel;
 
 // Grid of hardware lamp keys bound to a choice parameter (effect selectors).
+// values[i] is the choice index key i selects (the COLOR keys skip the retired slot 4).
 class KeyGrid : public juce::Component
 {
 public:
-    KeyGrid (juce::RangedAudioParameter& param, juce::StringArray labels, int columns);
+    KeyGrid (juce::RangedAudioParameter& param, juce::StringArray labels, juce::Array<int> values, int columns,
+             std::function<int (int)> normalise = nullptr);
     void resized() override;
     void showValue (int value);
+    void setTooltips (const juce::StringArray& tips);
+    std::function<void (int)> onPick;   // after a key click (value picked)
     int gapX = 8, gapY = 6;
 private:
     juce::OwnedArray<juce::TextButton> buttons;
+    juce::Array<int> vals;
+    std::function<int (int)> norm;
     juce::ParameterAttachment attachment;
     int cols = 1, shown = -1;
 };
@@ -48,6 +54,7 @@ class ProPanel : public juce::Component
 public:
     explicit ProPanel (DJToolsAudioProcessor& p);
     void show (const juce::String& reason);
+    void licenceChanged();   // the processor's licence changed (another instance, trial expiry): redraw if open
     void paint (juce::Graphics&) override;
     void resized() override;
     void mouseDown (const juce::MouseEvent& e) override;   // click outside the card closes it
@@ -61,7 +68,7 @@ private:
     juce::TextEditor emailBox, keyBox;
     juce::ToggleButton subscribe { "Send me tips and offers" };
     juce::TextButton trialButton { "START 7-DAY FREE TRIAL" }, unlockButton { "UNLOCK" },
-                     buyButton { "BUY DJ TOOLS" }, closeButton { "CLOSE" };
+                     buyButton { "UPGRADE" }, closeButton { "CLOSE" };
 };
 
 // Covers the controls while there's no trial or key.
@@ -96,7 +103,12 @@ public:
     void resized() override;
     void timerCallback() override;
     void openPanel (const juce::String& reason) { proPanel.show (reason); }
-    void showSection (bool beat) { ledBeat = beat; ledTouch = 0; }   // tests
+    // tests
+    void showSection (bool beat) { ledBeat = beat; ledTouch = 0; idleFrames = 0; hintFrames = 0; }
+    void showIdle() { ledTouch = 0; idleFrames = idleAfter; hintFrames = 0; }
+    void showFxOnHint() { ledBeat = true; ledTouch = 0; idleFrames = 0; hintFrames = hintLength; }
+    juce::String getLedLabel() const { return ledLabel; }
+    juce::String getLedText() const  { return ledText; }
 
 private:
     struct Knob
@@ -129,8 +141,16 @@ private:
     bool ledBeat = false;
     int ledTouch = 0;                       // frames left showing a just-touched secondary value
     juce::String touchedLabel, touchedText;
+    // "PRESS FX ON": after the user sets up a BEAT effect while it's off, the FX ON key blinks and the
+    // LED says so for a few seconds. (We don't switch it on for them: DJs pick the next effect while
+    // it's off, then drop it in on the beat.)
+    static constexpr int hintLength = 150, idleAfter = 240;   // frames at 30 Hz
+    int hintFrames = 0;
+    int idleFrames = idleAfter;            // frames since the last control change; idle + nothing on = show a hint
+    juce::TooltipWindow tooltips { this, 500 };
     std::map<juce::String, float> lastValues;
     bool wasUnlocked = false;
+    int seenLicenceVersion = -1;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DJToolsAudioProcessorEditor)
 };

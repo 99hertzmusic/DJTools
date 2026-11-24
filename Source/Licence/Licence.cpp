@@ -24,14 +24,43 @@ static juce::MemoryBlock fromBase64Url (juce::String s)
 int LicenceInfo::daysLeft() const
 {
     if (expires == 0) return 9999;
-    const auto secs = expires - juce::Time::currentTimeMillis() / 1000;
+    // 5 minutes' grace, so a trial issued a moment ago shows 7 days, not 8.
+    const auto secs = expires - juce::Time::currentTimeMillis() / 1000 - 300;
     return secs <= 0 ? 0 : (int) ((secs + 86399) / 86400);
+}
+
+juce::String LicenceInfo::daysLeftText() const
+{
+    const auto d = daysLeft();
+    return juce::String (d) + (d == 1 ? " DAY LEFT" : " DAYS LEFT");
+}
+
+juce::String LicenceInfo::buttonText() const
+{
+    const juce::String dot (juce::CharPointer_UTF8 (" \xc2\xb7 "));
+    switch (kind)
+    {
+        case pro:          return "LICENSED";
+        case trial:        return "TRIAL" + dot + daysLeftText() + dot + "UPGRADE";
+        case trialExpired: return "TRIAL ENDED" + dot + "UPGRADE";
+        default:           return "UPGRADE";
+    }
+}
+
+juce::String Licence::cleanKey (const juce::String& pasted)
+{
+    auto s = pasted;
+    const auto start = s.indexOf ("99HZ-");
+    if (start > 0) s = s.substring (start);
+    s = s.retainCharacters ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.");
+    while (s.endsWithChar ('.')) s = s.dropLastCharacters (1);
+    return s;
 }
 
 LicenceInfo Licence::verify (const juce::String& rawKey, const juce::String& productId)
 {
     LicenceInfo info;
-    auto key = rawKey.trim().removeCharacters (" \t\r\n");
+    auto key = cleanKey (rawKey);
     if (key.isEmpty()) return info;
     info.kind = LicenceInfo::invalid;
     if (! key.startsWith ("99HZ-")) return info;
@@ -89,12 +118,20 @@ LicenceInfo Licence::apply (const juce::String& key) const
 {
     auto info = verify (key, product);
     if (info.kind == LicenceInfo::invalid || info.kind == LicenceInfo::none) return info;
-    // Never let an expired trial key replace a real one.
+
+    // Never let a locked key (an ended trial) replace an unlocked one, or a trial replace pro.
     const auto current = check();
+    if (current.unlocked() && ! info.unlocked()) return current;
     if (current.kind == LicenceInfo::pro && info.kind != LicenceInfo::pro) return current;
+
     const auto f = keyFile();
+    const auto clean = cleanKey (key);
     f.getParentDirectory().createDirectory();
-    f.replaceWithText (key.trim().removeCharacters (" \t\r\n"));
+    if (! f.replaceWithText (clean)) { info.kind = LicenceInfo::saveFailed; return info; }
+
+    // Read it back: if the folder silently refused the write, say so rather than unlock until restart.
+    const auto saved = check();
+    if (! saved.sameAs (info)) { info.kind = LicenceInfo::saveFailed; return info; }
     return info;
 }
 
@@ -128,18 +165,59 @@ void Licence::requestTrial (const juce::String& email, bool subscribe,
         else
         {
             const auto reply = juce::JSON::parse (stream->readEntireStreamAsString());
-            if ((bool) reply["ok"])
+            if (! reply.isObject())
+                error = "Couldn't start the trial. Try again or email info@99hertz.com.";   // e.g. an HTML error page
+            else if ((bool) reply["ok"])
             {
                 info = self.apply (reply["key"].toString());
-                if (! info.unlocked())
+                if (info.kind == LicenceInfo::saveFailed)
+                    error = "Couldn't save your key. Email info@99hertz.com.";
+                else if (! info.unlocked())
                     error = info.kind == LicenceInfo::trialExpired ? "Your free trial for this email has already ended."
                                                                    : "Something went wrong with the trial key. Email info@99hertz.com.";
             }
             else
                 error = reply["error"].toString().isNotEmpty() ? reply["error"].toString()
-                                                               : "Couldn't start the trial (error " + juce::String (status) + ").";
+                                                               : "Couldn't start the trial. Try again or email info@99hertz.com.";
         }
         juce::MessageManager::callAsync ([done, info, error] { done (info, error); });
     });
+}
+
+// ── LicenceWatcher ────────────────────────────────────────────────────────────
+LicenceWatcher::LicenceWatcher (const Licence& l, LicenceInfo current, std::function<void (const LicenceInfo&)> cb,
+                                int pollMs, int fullCheckMs)
+    : licence (l), onChange (std::move (cb)), last (std::move (current)), fullMs (fullCheckMs)
+{
+    lastDays = last.daysLeft();
+    stamp();
+    lastFull = juce::Time::getMillisecondCounter();
+    startTimer (pollMs);
+}
+
+LicenceWatcher::~LicenceWatcher() { stopTimer(); }
+
+void LicenceWatcher::stamp()
+{
+    const auto f = licence.keyFile();
+    fileSize = f.existsAsFile() ? f.getSize() : -1;
+    fileTime = fileSize >= 0 ? f.getLastModificationTime().toMilliseconds() : 0;
+}
+
+void LicenceWatcher::poll (bool force)
+{
+    const auto oldTime = fileTime, oldSize = fileSize;
+    stamp();
+    const auto now = juce::Time::getMillisecondCounter();
+    const bool fileChanged = fileTime != oldTime || fileSize != oldSize;
+    const bool due = now - lastFull >= (juce::uint32) fullMs;
+    if (! (force || fileChanged || due)) return;
+    lastFull = now;
+
+    const auto info = licence.check();
+    const auto days = info.daysLeft();
+    if (info.sameAs (last) && days == lastDays) return;
+    last = info; lastDays = days;
+    if (onChange) onChange (info);
 }
 } // namespace hz

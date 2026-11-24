@@ -9,28 +9,41 @@
 namespace dj
 {
 // ── COLOR section: one-knob effects (bipolar COLOR dial, centre = off) ──────────
-enum ColorFx { cFilter = 0, cSweep, cDubEcho, cSpace, cNoise, cCrush, numColorFx };
+// Slot 4 was NOISE (removed 24 Nov 2026). The slot stays so saved sessions and automation keep their
+// indices (CRUSH is still 5). Anything that lands on slot 4 (an old session, a host setting the raw
+// value) plays FILTER: always go through colorSlot().
+enum ColorFx { cFilter = 0, cSweep, cDubEcho, cSpace, cRetired4, cCrush, numColorFx };
+
+inline int colorSlot (int i)
+{
+    if (i < 0 || i >= numColorFx || i == cRetired4) return cFilter;
+    return i;
+}
+
+// The effects the COLOR keys show, left to right.
+inline constexpr int numColorKeys = 5;
+inline constexpr int colorKeyFx[numColorKeys] = { cFilter, cSweep, cDubEcho, cSpace, cCrush };
 
 inline const char* colorName (int i)
 {
-    static const char* n[] = { "FILTER", "SWEEP", "DUB ECHO", "SPACE", "NOISE", "CRUSH" };
-    return n[i >= 0 && i < numColorFx ? i : 0];
+    static const char* n[] = { "FILTER", "SWEEP", "DUB ECHO", "SPACE", "FILTER", "CRUSH" };
+    return n[colorSlot (i)];
 }
 // What turning the COLOR dial left / right does (silk under the big dial).
 inline const char* colorLeft (int i)
 {
-    static const char* n[] = { "LOW PASS", "GATE", "MID ECHO", "LOW ROOM", "DOWN", "DRIVE" };
-    return n[i >= 0 && i < numColorFx ? i : 0];
+    static const char* n[] = { "LOW PASS", "GATE", "MID ECHO", "LOW ROOM", "LOW PASS", "DRIVE" };
+    return n[colorSlot (i)];
 }
 inline const char* colorRight (int i)
 {
-    static const char* n[] = { "HIGH PASS", "BAND", "HIGH ECHO", "HIGH ROOM", "UP", "CRUSH" };
-    return n[i >= 0 && i < numColorFx ? i : 0];
+    static const char* n[] = { "HIGH PASS", "BAND", "HIGH ECHO", "HIGH ROOM", "HIGH PASS", "CRUSH" };
+    return n[colorSlot (i)];
 }
 inline const char* colorParamName (int i)
 {
-    static const char* n[] = { "RESONANCE", "DEPTH", "FEEDBACK", "SIZE", "NOISE LEVEL", "INTENSITY" };
-    return n[i >= 0 && i < numColorFx ? i : 0];
+    static const char* n[] = { "RESONANCE", "DEPTH", "FEEDBACK", "SIZE", "RESONANCE", "INTENSITY" };
+    return n[colorSlot (i)];
 }
 
 // COLOR dial: -100..+100. Inside +-colorDeadZone it is OFF (bit-exact passthrough), so a hardware
@@ -47,7 +60,7 @@ inline const char* beatName (int i)
                                "ROLL", "SLIP ROLL", "BRAKE", "HELIX", "SPIRAL", "PITCH" };
     return n[i >= 0 && i < numBeatFx ? i : 0];
 }
-inline const char* beatParamName (int i) { return i == bPitch ? "PITCH" : "LEVEL"; }
+inline const char* beatParamName (int i) { return i == bPitch ? "PITCH" : "AMOUNT"; }
 
 // Send effects keep ringing after they are switched off (the DJ feel); insert effects stop.
 inline bool beatIsSend (int i)

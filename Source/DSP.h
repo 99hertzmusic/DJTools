@@ -149,16 +149,6 @@ struct Allpass
     }
 };
 
-struct Noise
-{
-    uint32_t s = 0x9E3779B9u;
-    float next()
-    {
-        s ^= s << 13; s ^= s >> 17; s ^= s << 5;
-        return (float) ((double) s / 2147483648.0 - 1.0);
-    }
-};
-
 inline float softClip (float x)
 {
     // Untouched up to 1.5 (+3.5 dBFS), then bends smoothly towards 2.0 (+6 dBFS).

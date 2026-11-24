@@ -5,6 +5,7 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "../Source/PluginProcessor.h"
 #include "../Source/PluginEditor.h"
+#include "LicenceTests.h"
 #include <cmath>
 #include <functional>
 
@@ -229,7 +230,8 @@ static float maxD2 (const Buf& b, int from, int to)
     return m;
 }
 
-static const char* colorIds[] = { "FILTER", "SWEEP", "DUB ECHO", "SPACE", "NOISE", "CRUSH" };
+// Indexed by dj::ColorFx. Slot 4 was NOISE (removed); it isn't a key any more and plays FILTER.
+static const char* colorIds[] = { "FILTER", "SWEEP", "DUB ECHO", "SPACE", "(old slot 4)", "CRUSH" };
 
 // ── 1. Every effect makes sound, stays safe ─────────────────────────────────
 static void effectTests()
@@ -237,7 +239,7 @@ static void effectTests()
     std::printf ("\n== Every effect: output, level safety, NaN / denormal ==\n");
     const auto mus = music (4.0);
     const int len = (int) (3.0 * 48000);
-    for (int fx = 0; fx < dj::numColorFx; ++fx)
+    for (int fx : dj::colorKeyFx)
         for (float dial : { -70.0f, 70.0f, -100.0f, 100.0f })
         {
             float worst = 0; double minDiff = 1e9; bool ok = true;
@@ -294,7 +296,7 @@ static void effectTests()
             {
                 Rig r (hz::LicenceInfo::pro, cfg.first, cfg.second, 128.0);
                 const auto m = music (1.5, cfg.first);
-                r.set ("beat_fx", (float) fx); r.set ("beat_on", 1.0f); r.set ("color", fx % 2 ? 60.0f : -60.0f); r.set ("color_fx", (float) (fx % 6));
+                r.set ("beat_fx", (float) fx); r.set ("beat_on", 1.0f); r.set ("color", fx % 2 ? 60.0f : -60.0f); r.set ("color_fx", (float) dj::colorKeyFx[fx % dj::numColorKeys]);
                 if (fx == dj::bPitch) r.set ("level", 80.0f);
                 auto out = r.run (m, (int) (1.5 * cfg.first));
                 const bool good = healthy (out) && peak (out) <= 2.0f && diffDb (m, out, (int) (0.5 * cfg.first)) > -40.0;
@@ -529,7 +531,7 @@ static void deadZoneTests()
 {
     std::printf ("\n== COLOR centre dead zone = bit-exact passthrough ==\n");
     const auto mus = music (2.0);
-    for (int fx = 0; fx < dj::numColorFx; ++fx)
+    for (int fx : dj::colorKeyFx)
     {
         bool ok = true;
         // MIDI 63 and 64 of 127 land at -0.79 and +0.79 on the -100..100 dial
@@ -613,19 +615,18 @@ static void clickTests()
     check (bad.isEmpty(), "BEAT: " + juce::String (n) + " events (ON, OFF, HOLD down/up, division and effect change, all 14 effects) stay under "
            + juce::String (limit, 1) + "x the steady-state curvature" + (bad.isEmpty() ? "" : "  FAILED: " + bad));
     bad = {}; worst = 0; n = 0;
-    for (int fx = 0; fx < dj::numColorFx; ++fx)
+    for (int fx : dj::colorKeyFx)
     {
         auto base = [fx] (Rig& r) { r.set ("color_fx", (float) fx); r.set ("color_param", 60.0f); };
-        if (fx != dj::cNoise)   // NOISE: the dial sweeps a noise filter, its own movement is the sound (checked for safety elsewhere)
-        {
-            test (juce::String (colorIds[fx]) + " 0->-80", base, [] (Rig& r) { r.set ("color", -80.0f); });
-            test (juce::String (colorIds[fx]) + " 0->+80", base, [] (Rig& r) { r.set ("color", 80.0f); });
-            test (juce::String (colorIds[fx]) + " -80->+80", [base] (Rig& r) { base (r); r.set ("color", -80.0f); }, [] (Rig& r) { r.set ("color", 80.0f); });
-            n += 3;
-        }
+        test (juce::String (colorIds[fx]) + " 0->-80", base, [] (Rig& r) { r.set ("color", -80.0f); });
+        test (juce::String (colorIds[fx]) + " 0->+80", base, [] (Rig& r) { r.set ("color", 80.0f); });
+        test (juce::String (colorIds[fx]) + " -80->+80", [base] (Rig& r) { base (r); r.set ("color", -80.0f); }, [] (Rig& r) { r.set ("color", 80.0f); });
+        n += 3;
         test (juce::String (colorIds[fx]) + " +60->0", [base] (Rig& r) { base (r); r.set ("color", 60.0f); }, [] (Rig& r) { r.set ("color", 0.0f); });
         test (juce::String (colorIds[fx]) + " param", [base] (Rig& r) { base (r); r.set ("color", -60.0f); }, [] (Rig& r) { r.set ("color_param", 0.0f); });
-        const int nx = (fx + 1) % dj::numColorFx;
+        int k = 0;
+        while (dj::colorKeyFx[k] != fx) ++k;
+        const int nx = dj::colorKeyFx[(k + 1) % dj::numColorKeys];
         test (juce::String (colorIds[fx]) + "->" + colorIds[nx], [base] (Rig& r) { base (r); r.set ("color", -60.0f); }, [nx] (Rig& r) { r.set ("color_fx", (float) nx); });
         n += 3;
     }
@@ -723,6 +724,145 @@ static void stateTests()
     }
 }
 
+// ── 7b. Old sessions saved with NOISE (removed 24 Nov 2026) ───────────────────
+static void retiredNoiseTests()
+{
+    std::printf ("\n== Old sessions with NOISE selected ==\n");
+    const auto mus = music (2.0);
+    // Exactly what v1.0 (with NOISE) saved: APVTS XML with color_fx = 4.
+    juce::XmlElement old ("DJToolsState");
+    const std::pair<const char*, double> vals[] = { { "color_fx", 4 }, { "color", -60 }, { "color_param", 55 }, { "beat_fx", 1 },
+                                                    { "beat", 3 }, { "time", 0 }, { "level", 50 }, { "band_low", 1 }, { "band_mid", 1 },
+                                                    { "band_high", 1 }, { "beat_on", 0 }, { "beat_hold", 0 } };
+    for (auto& v : vals)
+    {
+        auto* e = old.createNewChildElement ("PARAM");
+        e->setAttribute ("id", v.first); e->setAttribute ("value", v.second);
+    }
+    juce::MemoryBlock mb;
+    juce::AudioProcessor::copyXmlToBinary (old, mb);
+
+    Rig a;
+    a.p->setStateInformation (mb.getData(), (int) mb.getSize());
+    check (std::lround (a.get ("color_fx")) == dj::cFilter && a.p->currentParams().colorFx == dj::cFilter
+               && std::abs (a.get ("color") + 60.0f) < 0.01f && std::abs (a.get ("color_param") - 55.0f) < 0.01f,
+           "Session saved with NOISE loads without a crash, switches to FILTER, keeps the other settings");
+    Rig f;
+    f.set ("color_fx", (float) dj::cFilter); f.set ("color", -60.0f); f.set ("color_param", 55.0f);
+    auto oa = a.run (mus, 48000), of = f.run (mus, 48000);
+    check (healthy (oa) && diffDb (of, oa) < -200.0 && diffDb (mus, oa, 4800) > -35.0, "...and sounds exactly like FILTER (bit-identical), finite");
+
+    // A host / automation lane still writing the old NOISE value: plays FILTER, never silence or garbage.
+    Rig h, ref;
+    for (auto* r : { &h, &ref }) { r->set ("color", 70.0f); r->set ("color_param", 40.0f); }
+    h.set ("color_fx", 4.0f); ref.set ("color_fx", (float) dj::cFilter);
+    auto oh = h.run (mus, 48000), orf = ref.run (mus, 48000);
+    check (healthy (oh) && diffDb (orf, oh) < -200.0, "Automation landing on the old NOISE slot plays FILTER (bit-identical)");
+    {
+        // CRUSH keeps its saved index (5), so sessions and automation don't shift.
+        Rig c; c.set ("color_fx", 5.0f);
+        juce::MemoryBlock m2; c.p->getStateInformation (m2);
+        Rig d; d.p->setStateInformation (m2.getData(), (int) m2.getSize());
+        check (d.p->currentParams().colorFx == dj::cCrush && std::lround (d.get ("color_fx")) == 5, "CRUSH keeps index 5: saved sessions and automation don't shift");
+    }
+    {
+        auto* prm = dynamic_cast<juce::AudioParameterChoice*> (a.p->apvts.getParameter ("color_fx"));
+        bool noNoise = prm != nullptr;
+        if (prm) for (auto& c : prm->choices) noNoise = noNoise && ! c.containsIgnoreCase ("noise");
+        check (noNoise, "No parameter choice is called Noise any more");
+    }
+    {
+        // Editor opened on an old NOISE session: FILTER key lit, no NOISE key, 5 COLOR keys.
+        Rig r;
+        r.p->setStateInformation (mb.getData(), (int) mb.getSize());
+        r.set ("color_fx", 4.0f);   // and a host forcing the raw value afterwards
+        std::unique_ptr<juce::AudioProcessorEditor> ed (r.p->createEditor());
+        KeyGrid* colorGrid = nullptr;
+        for (auto* c : ed->getChildren()) if (auto* kg = dynamic_cast<KeyGrid*> (c)) { colorGrid = kg; break; }
+        int keys = 0; bool filterLit = false, anyNoise = false, otherLit = false;
+        if (colorGrid)
+            for (auto* c : colorGrid->getChildren())
+                if (auto* b = dynamic_cast<juce::TextButton*> (c))
+                {
+                    ++keys;
+                    anyNoise = anyNoise || b->getButtonText().containsIgnoreCase ("noise");
+                    if (b->getButtonText() == "FILTER") filterLit = b->getToggleState();
+                    else otherLit = otherLit || b->getToggleState();
+                }
+        check (keys == 5 && filterLit && ! otherLit && ! anyNoise, "Editor on an old NOISE session: 5 COLOR keys, no NOISE, FILTER lit");
+    }
+}
+
+// ── 7c. Usability: LED always says what's happening, tooltips everywhere ─────
+static void uiHelpTests()
+{
+    std::printf ("\n== Usability: LED status, FX ON hint, tooltips ==\n");
+    const auto mus = music (1.0);
+    auto led = [&] (std::function<void (Rig&)> setup, std::function<void (DJToolsAudioProcessorEditor&)> view)
+    {
+        Rig r (hz::LicenceInfo::pro, 48000.0, 256, 128.0);
+        if (setup) setup (r);
+        r.run (mus, 4800);
+        std::unique_ptr<juce::AudioProcessorEditor> ed (r.p->createEditor());
+        auto* e = dynamic_cast<DJToolsAudioProcessorEditor*> (ed.get());
+        if (view) view (*e);
+        e->timerCallback();
+        return e->getLedLabel() + " | " + e->getLedText();
+    };
+    auto has = [] (const juce::String& s, const char* utf8) { return s.contains (juce::String::fromUTF8 (utf8)); };
+    auto t1 = led (nullptr, nullptr);
+    check (has (t1, "TURN COLOR OR PRESS FX ON"), "Nothing on: the LED shows a hint (" + t1 + ")");
+    auto t2 = led ([] (Rig& r) { r.set ("beat_fx", dj::bEcho); r.set ("beat", 3.0f); }, [] (DJToolsAudioProcessorEditor& e) { e.showSection (true); });
+    check (has (t2, "ECHO 1/2 BEAT \xc2\xb7 OFF") && has (t2, "PRESS FX ON"), "BEAT off: LED says the effect, the length and OFF (" + t2 + ")");
+    auto t3 = led ([] (Rig& r) { r.set ("beat_fx", dj::bEcho); r.set ("beat", 3.0f); r.set ("beat_on", 1.0f); }, [] (DJToolsAudioProcessorEditor& e) { e.showSection (true); });
+    check (has (t3, "ECHO 1/2 BEAT \xc2\xb7 ON"), "BEAT on: LED says ON (" + t3 + ")");
+    auto t4 = led ([] (Rig& r) { r.set ("beat_fx", dj::bRoll); }, [] (DJToolsAudioProcessorEditor& e) { e.showFxOnHint(); });
+    check (has (t4, "PRESS FX ON"), "Effect picked while off: LED flashes PRESS FX ON (" + t4 + ")");
+    auto t5 = led ([] (Rig& r) { r.set ("color_fx", dj::cDubEcho); r.set ("color", -50.0f); }, [] (DJToolsAudioProcessorEditor& e) { e.showSection (false); });
+    check (has (t5, "DUB ECHO") && has (t5, "MID ECHO"), "COLOR on: LED names the effect and the side (" + t5 + ")");
+    {
+        // the hint really fires from a key click while FX is off, and FX ON clears it
+        Rig r (hz::LicenceInfo::pro, 48000.0, 256, 128.0);
+        r.run (mus, 4800);
+        std::unique_ptr<juce::AudioProcessorEditor> ed (r.p->createEditor());
+        auto* e = dynamic_cast<DJToolsAudioProcessorEditor*> (ed.get());
+        KeyGrid* beatGrid = nullptr; int n = 0;
+        for (auto* c : ed->getChildren()) if (auto* kg = dynamic_cast<KeyGrid*> (c)) if (n++ == 1) beatGrid = kg;
+        juce::TextButton* flanger = nullptr;
+        if (beatGrid) for (auto* c : beatGrid->getChildren()) if (auto* b = dynamic_cast<juce::TextButton*> (c)) if (b->getButtonText() == "FLANGER") flanger = b;
+        if (flanger != nullptr && flanger->onClick) flanger->onClick();   // what a mouse click runs
+        e->timerCallback();
+        const auto a = e->getLedLabel() + " | " + e->getLedText();
+        const bool stillOff = r.get ("beat_on") < 0.5f;
+        r.set ("beat_on", 1.0f);
+        e->timerCallback();
+        const auto b = e->getLedLabel() + " | " + e->getLedText();
+        check (flanger != nullptr && std::lround (r.get ("beat_fx")) == dj::bFlanger && stillOff && has (a, "PRESS FX ON") && has (b, "FLANGER") && has (b, "\xc2\xb7 ON"),
+               "Clicking FLANGER while off selects it, leaves it off and says PRESS FX ON; FX ON then shows ON (" + a + " / " + b + ")");
+    }
+    {
+        Rig r;
+        std::unique_ptr<juce::AudioProcessorEditor> ed (r.p->createEditor());
+        int controls = 0; juce::StringArray missing;
+        std::function<void (juce::Component&)> walk = [&] (juce::Component& c)
+        {
+            for (auto* ch : c.getChildren())
+            {
+                if (dynamic_cast<ProPanel*> (ch) || dynamic_cast<LockOverlay*> (ch)) continue;
+                if (auto* tc = dynamic_cast<juce::SettableTooltipClient*> (ch))
+                    if (dynamic_cast<juce::Button*> (ch) || dynamic_cast<juce::Slider*> (ch))
+                    {
+                        ++controls;
+                        if (tc->getTooltip().isEmpty()) missing.add (ch->getName() + "/" + (dynamic_cast<juce::Button*> (ch) ? dynamic_cast<juce::Button*> (ch)->getButtonText() : juce::String ("dial")));
+                    }
+                walk (*ch);
+            }
+        };
+        walk (*ed);
+        check (controls >= 30 && missing.isEmpty(), "Every key and dial has a hover tooltip (" + juce::String (controls) + " controls)" + (missing.isEmpty() ? "" : "  MISSING: " + missing.joinIntoString (", ")));
+    }
+}
+
 // ── 8. Licence gate ──────────────────────────────────────────────────────────
 static void licenceGateTests()
 {
@@ -734,7 +874,7 @@ static void licenceGateTests()
         for (int fx = 0; fx < dj::numBeatFx; ++fx)
         {
             Rig r (kind);
-            r.set ("color_fx", (float) (fx % 6)); r.set ("color", -80.0f); r.set ("beat_fx", (float) fx); r.set ("beat_on", 1.0f);
+            r.set ("color_fx", (float) dj::colorKeyFx[fx % dj::numColorKeys]); r.set ("color", -80.0f); r.set ("beat_fx", (float) fx); r.set ("beat_on", 1.0f);
             r.set ("band_low", 0.0f); r.set ("level", 100.0f);
             auto out = r.run (mus, 2 * 48000);
             ok = ok && bitExact (mus, out, 2 * 48000);
@@ -769,7 +909,7 @@ static void keyTests (int argc, char** argv)
         ++n;
         const auto name = arg.upToFirstOccurrenceOf ("=", false, false);
         const auto info = hz::Licence::verify (arg.fromFirstOccurrenceOf ("=", false, false), dj::licenceProduct);
-        const char* kinds[] = { "none", "trial", "pro", "trialExpired", "invalid" };
+        const char* kinds[] = { "none", "trial", "pro", "trialExpired", "invalid", "saveFailed" };
         hz::LicenceInfo::Kind want = hz::LicenceInfo::invalid;
         if (name == "pro" || name == "all") want = hz::LicenceInfo::pro;
         else if (name == "trial") want = hz::LicenceInfo::trial;
@@ -795,7 +935,8 @@ static void snapshots (const juce::File& outDir)
 {
     std::printf ("\n== UI snapshots ==\n");
     const auto mus = music (3.0);
-    auto snap = [&] (const char* name, hz::LicenceInfo::Kind kind, int panel, bool beatLed, std::function<void (Rig&)> setup)
+    // view: 0 = COLOR on the LED, 1 = BEAT, 2 = idle (nothing touched), 3 = "PRESS FX ON" hint
+    auto snap = [&] (const char* name, hz::LicenceInfo::Kind kind, int panel, int view, std::function<void (Rig&)> setup)
     {
         Rig r (kind, 48000.0, 256, 128.0, 6.3);
         if (setup) setup (r);
@@ -804,7 +945,9 @@ static void snapshots (const juce::File& outDir)
         auto* e = dynamic_cast<DJToolsAudioProcessorEditor*> (ed.get());
         auto* t = dynamic_cast<juce::Timer*> (ed.get());
         for (int i = 0; i < 3; ++i) t->timerCallback();
-        e->showSection (beatLed);
+        if (view == 2) e->showIdle();
+        else if (view == 3) e->showFxOnHint();
+        else e->showSection (view == 1);
         t->timerCallback();
         for (auto* c : ed->getChildren())
             if (auto* pp = dynamic_cast<ProPanel*> (c)) { if (panel == 1) pp->show ({}); else if (panel == 0) pp->setVisible (false); }
@@ -814,20 +957,32 @@ static void snapshots (const juce::File& outDir)
         juce::PNGImageFormat().writeImageToStream (img, fo);
         std::printf ("  %s\n", name);
     };
-    snap ("ui-01-locked-first-open.png", hz::LicenceInfo::none, -1, false, nullptr);
-    snap ("ui-02-locked-overlay.png", hz::LicenceInfo::none, 0, false, nullptr);
-    snap ("ui-03-trial-color-filter.png", hz::LicenceInfo::trial, 0, false, [] (Rig& r) { r.set ("color", 62.0f); r.set ("color_param", 65.0f); });
-    snap ("ui-04-trial-beat-echo-on.png", hz::LicenceInfo::trial, 0, true, [] (Rig& r) { r.set ("beat_on", 1.0f); r.set ("beat", 4.0f); r.set ("level", 64.0f); });
-    snap ("ui-05-pro-both-sections.png", hz::LicenceInfo::pro, 0, true, [] (Rig& r)
+    snap ("ui-01-locked-first-open.png", hz::LicenceInfo::none, -1, 0, nullptr);
+    snap ("ui-02-locked-overlay.png", hz::LicenceInfo::none, 0, 0, nullptr);
+    snap ("ui-03-trial-color-filter.png", hz::LicenceInfo::trial, 0, 0, [] (Rig& r) { r.set ("color", 62.0f); r.set ("color_param", 65.0f); });
+    snap ("ui-04-trial-beat-echo-on.png", hz::LicenceInfo::trial, 0, 1, [] (Rig& r) { r.set ("beat_on", 1.0f); r.set ("beat", 4.0f); r.set ("level", 64.0f); });
+    snap ("ui-05-pro-both-sections.png", hz::LicenceInfo::pro, 0, 1, [] (Rig& r)
           { r.set ("color_fx", dj::cDubEcho); r.set ("color", -55.0f); r.set ("beat_fx", dj::bRoll); r.set ("beat", 2.0f); r.set ("beat_on", 1.0f); r.set ("band_low", 0.0f); r.set ("level", 80.0f); });
-    snap ("ui-06-pro-pitch-time.png", hz::LicenceInfo::pro, 0, true, [] (Rig& r)
+    snap ("ui-06-pro-pitch-time.png", hz::LicenceInfo::pro, 0, 1, [] (Rig& r)
           { r.set ("color_fx", dj::cCrush); r.set ("color", 100.0f); r.set ("beat_fx", dj::bPitch); r.set ("level", 85.0f); r.set ("time", 180.0f); r.set ("beat_on", 1.0f); });
-    snap ("ui-07-pro-color-space-left.png", hz::LicenceInfo::pro, 0, false, [] (Rig& r)
+    snap ("ui-07-pro-color-space-left.png", hz::LicenceInfo::pro, 0, 0, [] (Rig& r)
           { r.set ("color_fx", dj::cSpace); r.set ("color", -80.0f); r.set ("beat_fx", dj::bBrake); r.set ("beat", 8.0f); });
-    snap ("ui-08-pro-panel.png", hz::LicenceInfo::pro, 1, false, nullptr);
-    snap ("ui-09-trial-ended.png", hz::LicenceInfo::trialExpired, 0, false, nullptr);
-    snap ("ui-10-trial-ended-panel.png", hz::LicenceInfo::trialExpired, 1, false, nullptr);
-    snap ("ui-11-trial-panel.png", hz::LicenceInfo::trial, 1, false, nullptr);
+    snap ("ui-08-pro-panel.png", hz::LicenceInfo::pro, 1, 0, nullptr);
+    snap ("ui-09-trial-ended.png", hz::LicenceInfo::trialExpired, 0, 0, nullptr);
+    snap ("ui-10-trial-ended-panel.png", hz::LicenceInfo::trialExpired, 1, 0, nullptr);
+    snap ("ui-11-trial-panel.png", hz::LicenceInfo::trial, 1, 0, nullptr);
+    snap ("ui-12-pro-first-open-nothing-on.png", hz::LicenceInfo::pro, 0, 2, nullptr);
+    snap ("ui-13-pro-beat-picked-press-fx-on.png", hz::LicenceInfo::pro, 0, 3, [] (Rig& r) { r.set ("beat_fx", dj::bEcho); r.set ("beat", 3.0f); });
+    snap ("ui-14-pro-beat-off.png", hz::LicenceInfo::pro, 0, 1, [] (Rig& r) { r.set ("beat_fx", dj::bFlanger); r.set ("beat", 7.0f); });
+    // Licence states (Launch prep renders)
+    snap ("licence-1-free.png", hz::LicenceInfo::none, 0, 0, nullptr);
+    snap ("licence-2-free-panel.png", hz::LicenceInfo::none, 1, 0, nullptr);
+    snap ("licence-3-trial.png", hz::LicenceInfo::trial, 0, 1, [] (Rig& r) { r.set ("beat_on", 1.0f); r.set ("beat", 4.0f); r.set ("level", 64.0f); });
+    snap ("licence-4-trial-panel.png", hz::LicenceInfo::trial, 1, 0, nullptr);
+    snap ("licence-5-trial-ended.png", hz::LicenceInfo::trialExpired, 0, 0, nullptr);
+    snap ("licence-6-trial-ended-panel.png", hz::LicenceInfo::trialExpired, 1, 0, nullptr);
+    snap ("licence-7-licensed.png", hz::LicenceInfo::pro, 0, 0, [] (Rig& r) { r.set ("color", 62.0f); r.set ("color_param", 65.0f); });
+    snap ("licence-8-licensed-panel.png", hz::LicenceInfo::pro, 1, 0, nullptr);
 }
 
 // ── Demos: every effect on a real loop ───────────────────────────────────────
@@ -877,7 +1032,7 @@ static int demos (int argc, char** argv)
     };
 
     // COLOR: 2 bars dry, swing left and back over 2 bars, right and back over 2 bars, 2 bars dry
-    for (int fx = 0; fx < dj::numColorFx; ++fx)
+    for (int fx : dj::colorKeyFx)
     {
         Rig r (hz::LicenceInfo::pro, rate, 256, bpm, 0.0);
         r.set ("color_fx", (float) fx);
@@ -890,7 +1045,9 @@ static int demos (int argc, char** argv)
             else if (b >= 16 && b < 24) v = (float) (100.0 * std::sin ((b - 16) / 8.0 * pi));
             r.set ("color", v);
         });
-        writeWav (od.getChildFile (juce::String::formatted ("1%d COLOR %s.wav", fx + 1, colorIds[fx])), out, rate);
+        int key = 0;
+        while (dj::colorKeyFx[key] != fx) ++key;
+        writeWav (od.getChildFile (juce::String::formatted ("1%d COLOR %s.wav", key + 1, colorIds[fx])), out, rate);
         std::printf ("  COLOR %-9s peak %5.1f dBFS  %s\n", colorIds[fx], juce::Decibels::gainToDecibels (peak (out)), stats (out).toRawUTF8());
     }
     // BEAT: 2 bars dry, effect ON for 2 bars (division change halfway), OFF so tails ring, dry.
@@ -950,11 +1107,16 @@ int main (int argc, char** argv)
     tailTests();
     smoothingTests();
     stateTests();
+    retiredNoiseTests();
+    uiHelpTests();
     if (! quick) { effectTests(); clickTests(); }
     keyTests (argc, argv);
     snapshots (outDir);
 
     std::printf ("\n%s: %d passed, %d failed (%.0f s)\n", failures == 0 ? "ALL PASS" : "FAILURES", passes, failures,
                  (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0);
-    return failures == 0 ? 0 : 1;
+
+    hztest::runLicenceTests<DJToolsAudioProcessor> ("djtools", [] (DJToolsAudioProcessor& p) { return p.unlocked.load(); });
+    const int licenceResult = hztest::finish();
+    return (failures == 0 && licenceResult == 0) ? 0 : 1;
 }

@@ -114,7 +114,7 @@ void Engine::reset()
     for (int c = 0; c < 2; ++c)
     {
         swHp[c].reset(); swBp[c].reset(); dubSendA[c].reset(); dubSendB[c].reset(); dubLp[c].reset(); dubHp[c].reset();
-        spSendA[c].reset(); spSendB[c].reset(); noiseF[c].reset(); crHp[c].reset(); crHold[c] = 0.0f;
+        spSendA[c].reset(); spSendB[c].reset(); crHp[c].reset(); crHold[c] = 0.0f;
         lowA[c].reset(); lowB[c].reset(); highA[c].reset(); highB[c].reset();
         bfSvf[c].reset(); revHp[c].reset(); flFb[c] = 0.0f; phFb[c] = 0.0f;
         for (auto& z : phZ[c]) z = 0.0f;
@@ -285,7 +285,7 @@ bool Engine::process (float* L, float* R, int n, const Params& p, const Transpor
     const double period = periodBeats (p, bpm);
     const double periodSamples = period * spb;
     const int sel  = clampT (p.beatFx, 0, numBeatFx - 1);
-    const int csel = clampT (p.colorFx, 0, numColorFx - 1);
+    const int csel = colorSlot (p.colorFx);   // slot 4 (old NOISE) plays FILTER
 
     if (fresh)
     {
@@ -516,19 +516,6 @@ bool Engine::process (float* L, float* R, int n, const Params& p, const Transpor
                 yL += m * (pl - xL); yR += m * (pr - xR);
             }
             else { swEnv = swSlow = 0.0f; swGain = 1.0f; for (int c = 0; c < 2; ++c) { swHp[c].reset(); swBp[c].reset(); } }
-
-            // NOISE: filtered white noise, left = low-pass sweeping down, right = high-pass sweeping up
-            w = colorW[cNoise].next();
-            if (w > 0.0f && av > 0.0f)
-            {
-                const double fc = v < 0 ? 16000.0 * std::pow (250.0 / 16000.0, (double) av) : 150.0 * std::pow (60.0, (double) av);
-                const float g = svfG (fc, sr);
-                noiseF[0].process (noise[0].next(), g, 0.8f); noiseF[1].process (noise[1].next(), g, 0.8f);
-                const float lvl = dbToGain (-28.0f + 22.0f * cp) * w * entry;
-                yL += lvl * (v < 0 ? noiseF[0].lp : noiseF[0].hp);
-                yR += lvl * (v < 0 ? noiseF[1].lp : noiseF[1].hp);
-            }
-            else { noiseF[0].reset(); noiseF[1].reset(); }
 
             // CRUSH: left = drive, right = bit crush + sample-rate reduction + high-pass (PARAM = intensity)
             w = colorW[cCrush].next();

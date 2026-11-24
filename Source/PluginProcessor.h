@@ -7,9 +7,9 @@
 #include "Licence/Licence.h"
 
 // DJ Tools: a club mixer's effects section in the DAW.
-//  COLOR: one-knob effects (FILTER, SWEEP, DUB ECHO, SPACE, NOISE, CRUSH) on a bipolar dial, centre = off.
+//  COLOR: one-knob effects (FILTER, SWEEP, DUB ECHO, SPACE, CRUSH) on a bipolar dial, centre = off.
 //  BEAT:  tempo-synced effects (delays, reverb, trans, filter, flanger, phaser, rolls, brake, pitch)
-//         with BEAT division, TIME, LEVEL/DEPTH, FX FREQ bands, ON and momentary HOLD.
+//         with BEAT division, TIME, AMOUNT, BAND keys, FX ON and momentary HOLD.
 // Every control is a plain automatable parameter, so a MIDI controller can be mapped in the DAW.
 // No free tier: without a trial or a key the audio passes through untouched (Features.h, dj::gate).
 class DJToolsAudioProcessor : public juce::AudioProcessor
@@ -47,7 +47,9 @@ public:
     hz::Licence licence { dj::licenceProduct };
     hz::LicenceInfo licenceInfo;                 // message thread
     std::atomic<bool> unlocked { false };        // audio thread reads this
-    void setLicenceInfo (const hz::LicenceInfo& i) { licenceInfo = i; unlocked.store (i.unlocked()); }
+    std::atomic<int> licenceVersion { 0 };       // bumps on every change, so open editors can follow
+    void setLicenceInfo (const hz::LicenceInfo& i) { licenceInfo = i; unlocked.store (i.unlocked()); ++licenceVersion; }
+    std::unique_ptr<hz::LicenceWatcher> licenceWatcher;   // picks up keys saved by other instances / trial expiry
 
     // ── What the editor shows ───────────────────────────────────────────────
     dj::Params currentParams() const;

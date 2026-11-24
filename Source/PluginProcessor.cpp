@@ -22,6 +22,7 @@ DJToolsAudioProcessor::DJToolsAudioProcessor()
     pHold       = apvts.getRawParameterValue ("beat_hold");
 
     setLicenceInfo (licence.check());
+    licenceWatcher = std::make_unique<hz::LicenceWatcher> (licence, licenceInfo, [this] (const hz::LicenceInfo& i) { setLicenceInfo (i); });
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout DJToolsAudioProcessor::createParameterLayout()
@@ -30,7 +31,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout DJToolsAudioProcessor::creat
     AudioProcessorValueTreeState::ParameterLayout l;
     auto id = [] (const char* s) { return ParameterID { s, 1 }; };
 
-    const StringArray colorNames { "Filter", "Sweep", "Dub Echo", "Space", "Noise", "Crush" };
+    // Slot 4 was Noise (removed). It stays so saved indices and automation don't shift, and plays Filter.
+    const StringArray colorNames { "Filter", "Sweep", "Dub Echo", "Space", "Filter", "Crush" };
     const StringArray beatNames { "Delay", "Echo", "Ping Pong", "Reverb", "Trans", "Filter", "Flanger", "Phaser",
                                   "Roll", "Slip Roll", "Brake", "Helix", "Spiral", "Pitch" };
     StringArray divNames;
@@ -60,20 +62,20 @@ juce::AudioProcessorValueTreeState::ParameterLayout DJToolsAudioProcessor::creat
                AudioParameterFloatAttributes()
                    .withStringFromValueFunction ([] (float v, int) { return v <= 0.5f ? String ("Sync") : String (juce::roundToInt (v)) + " ms"; })
                    .withValueFromStringFunction ([] (const String& s) { return s.trim().equalsIgnoreCase ("sync") ? 0.0f : s.getFloatValue(); })));
-    l.add (std::make_unique<AudioParameterFloat> (id ("level"), "Level/Depth", NormalisableRange<float> (0.0f, 100.0f, 0.01f), 50.0f,
+    l.add (std::make_unique<AudioParameterFloat> (id ("level"), "Amount", NormalisableRange<float> (0.0f, 100.0f, 0.01f), 50.0f,
                AudioParameterFloatAttributes().withLabel ("%")));
-    l.add (std::make_unique<AudioParameterBool> (id ("band_low"), "FX Freq Low", true));
-    l.add (std::make_unique<AudioParameterBool> (id ("band_mid"), "FX Freq Mid", true));
-    l.add (std::make_unique<AudioParameterBool> (id ("band_high"), "FX Freq High", true));
-    l.add (std::make_unique<AudioParameterBool> (id ("beat_on"), "Beat On", false));
-    l.add (std::make_unique<AudioParameterBool> (id ("beat_hold"), "Beat Hold", false));
+    l.add (std::make_unique<AudioParameterBool> (id ("band_low"), "Band Low", true));
+    l.add (std::make_unique<AudioParameterBool> (id ("band_mid"), "Band Mid", true));
+    l.add (std::make_unique<AudioParameterBool> (id ("band_high"), "Band High", true));
+    l.add (std::make_unique<AudioParameterBool> (id ("beat_on"), "FX On", false));
+    l.add (std::make_unique<AudioParameterBool> (id ("beat_hold"), "FX Hold", false));
     return l;
 }
 
 dj::Params DJToolsAudioProcessor::currentParams() const
 {
     dj::Params p;
-    p.colorFx    = juce::jlimit (0, dj::numColorFx - 1, (int) pColorFx->load());
+    p.colorFx    = dj::colorSlot ((int) std::lround (pColorFx->load()));
     p.color      = pColor->load();
     p.colorParam = juce::jlimit (0.0f, 1.0f, pColorParam->load() / 100.0f);
     p.beatFx     = juce::jlimit (0, dj::numBeatFx - 1, (int) pBeatFx->load());
@@ -170,7 +172,13 @@ void DJToolsAudioProcessor::setStateInformation (const void* data, int sizeInByt
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (apvts.state.getType()))
+        {
             apvts.replaceState (juce::ValueTree::fromXml (*xml));
+            // Sessions saved with the old NOISE effect: move them to FILTER (what slot 4 plays now).
+            if (auto* fx = apvts.getParameter ("color_fx"))
+                if ((int) std::lround (fx->convertFrom0to1 (fx->getValue())) == dj::cRetired4)
+                    fx->setValueNotifyingHost (fx->convertTo0to1 ((float) dj::cFilter));
+        }
 }
 
 juce::AudioProcessorEditor* DJToolsAudioProcessor::createEditor() { return new DJToolsAudioProcessorEditor (*this); }

@@ -97,8 +97,6 @@ private:
     dsp::Fdn   space;
     dsp::Svf   spSendA[2], spSendB[2];
     int  spaceQuiet = 0; bool spaceLive = false;
-    dsp::Noise noise[2];
-    dsp::Svf   noiseF[2];
     float      crHold[2] {}, crPhase = 0.0f;
     dsp::Svf   crHp[2];
     int        colorCtl = 0;
